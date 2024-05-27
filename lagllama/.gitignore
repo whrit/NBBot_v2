@@ -185,3 +185,4 @@ Post-Opponent Features_diagnostics.csv
 X_lstm_train_diagnostics.csv
 X_xgb_train_diagnostics.csv
 X_transformer_train_diagnostics.csv
+lightning_logs/
