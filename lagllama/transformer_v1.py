@@ -83,8 +83,15 @@ def diagnose_data_issues(data, label):
 
 def get_gluonts_format(df: pd.DataFrame, target, freq, prediction_length, test_length) -> TrainDatasets:
     meta = MetaData(freq=freq, prediction_length=prediction_length)
-    train = PandasDataset(df[: -test_length], target=target)
-    test = PandasDataset(df, target=target)
+    train_df = df[: -test_length].copy()
+    test_df = df.copy()
+    
+    train_df = train_df.set_index('date')
+    test_df = test_df.set_index('date')
+
+    train = PandasDataset(train_df, target=target)
+    test = PandasDataset(test_df, target=target)
+    
     df_gluonts = TrainDatasets(metadata=meta, train=train, test=test)
     return df_gluonts
 
@@ -123,6 +130,9 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3, freq
     game_data = pd.merge(game_data, odds_data, left_on=["date", "team_opp"], right_on=["date", "away"], how="left", suffixes=("_home", "_away"))
     diagnose_data_issues(game_data, "Post-Merge")
     logging.debug(f"Columns after merging: {game_data.columns}")
+
+    freq = pd.infer_freq(game_data['date'])
+    logging.debug(f"Inferred frequency: {freq}")
 
     logging.debug("Adding game_id column")
     game_data['game_id'] = game_data.groupby(['date', 'team']).ngroup()
