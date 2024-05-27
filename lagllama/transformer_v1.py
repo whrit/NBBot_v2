@@ -165,9 +165,6 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3):
     logging.info("Creating Transformer dataset")
     X_transformer, y_transformer = create_transformer_dataset(transformer_seqs, transformer_targets, feature_columns)
     
-    X_transformer_flattened = X_transformer.reshape(X_transformer.shape[0], -1)
-    diagnose_data_issues(pd.DataFrame(X_transformer_flattened), "X_transformer_train")
-
     X_transformer = np.array(X_transformer)
     y_transformer = np.array(y_transformer)
     
@@ -271,11 +268,11 @@ def create_sequences(data, window_size, target_col):
     for i in range(len(game_ids) - window_size):
         seq_games = game_ids[i:i + window_size]
         sequence = data[data['game_id'].isin(seq_games)]
-        features = sequence[feature_columns]
+        features = sequence[feature_columns].values
         target = sequence.iloc[-1][target_col]
         logging.debug(f"Features type: {type(features)}")
-        logging.debug(f"Features structure: {features.head()}")
-        X_seqs.append(features.values.flatten())  # Flatten the sequence
+        logging.debug(f"Features shape: {features.shape}")
+        X_seqs.append(features)
         y_seqs.append(target)
 
     logging.info("Sequences created")
@@ -284,10 +281,6 @@ def create_sequences(data, window_size, target_col):
 def create_transformer_dataset(sequences, targets, feature_columns):
     logging.info("Creating Transformer dataset")
     X = np.array(sequences)
-    num_sequences = X.shape[0]
-    sequence_length = X.shape[1] // len(feature_columns)
-    num_features = len(feature_columns)
-    X = X.reshape(num_sequences, sequence_length, num_features)
     
     label_encoder = LabelEncoder()
     y = label_encoder.fit_transform(targets)
