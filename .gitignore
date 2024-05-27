@@ -1,0 +1,17 @@
+nbaEnv/
+cache/
+.anima/
+logfile.log
+logs/
+training_log.csv
+Post-Feature Engineering_diagnostics.csv
+Post-Merge_diagnostics.csv
+Post-scaling Check_diagnostics.csv
+Post-Team Features_diagnostics.csv
+Pre-scaling Check_diagnostics.csv
+Post-Opponent Features_diagnostics.csv
+X_lstm_train_diagnostics.csv
+X_xgb_train_diagnostics.csv
+training_log.csv
+models/
+lagllama/
