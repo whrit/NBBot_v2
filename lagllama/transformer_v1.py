@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AdamW, get_scheduler
+from gluonts.dataset.common import MetaData, TrainDatasets
 from gluonts.dataset.pandas import PandasDataset
 from gluonts.evaluation import make_evaluation_predictions, Evaluator
 from lag_llama.gluon.estimator import LagLlamaEstimator
@@ -80,7 +81,14 @@ def diagnose_data_issues(data, label):
     numeric_df.to_csv(f'{label}_diagnostics.csv', index=False)
     logging.debug(f"Saved {label} diagnostics to {label}_diagnostics.csv")
 
-def prepare_data_for_transformer(historical_data, odds_data, window_size=3):
+def get_gluonts_format(df: pd.DataFrame, target, freq, prediction_length, test_length) -> TrainDatasets:
+    meta = MetaData(freq=freq, prediction_length=prediction_length)
+    train = PandasDataset(df[: -test_length], target=target)
+    test = PandasDataset(df, target=target)
+    df_gluonts = TrainDatasets(metadata=meta, train=train, test=test)
+    return df_gluonts
+
+def prepare_data_for_transformer(historical_data, odds_data, window_size=3, freq="D", prediction_length=1, test_length=10):
     logging.info("Preparing data...")
 
     logging.debug("Converting date to datetime and extracting season")
@@ -172,17 +180,11 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3):
         game_data[column] = le.fit_transform(game_data[column])
         label_encoders[column] = le
 
-    logging.info("Creating sequences for Transformer")
-    transformer_seqs, transformer_targets, feature_columns = create_sequences(game_data, window_size, 'winner')
+    logging.info("Creating GluonTS dataset")
+    gluonts_dataset = get_gluonts_format(game_data, target='winner', freq=freq, prediction_length=prediction_length, test_length=test_length)
 
-    logging.info("Creating Transformer dataset")
-    X_transformer, y_transformer = create_transformer_dataset(transformer_seqs, transformer_targets, feature_columns)
-    
-    X_transformer = np.array(X_transformer)
-    y_transformer = np.array(y_transformer)
-    
     logging.info("Data preparation completed.")
-    return X_transformer, y_transformer, label_encoders
+    return gluonts_dataset, label_encoders
 
 def add_team_features(df):
     logging.debug("Adding team features")
@@ -367,33 +369,14 @@ def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num
 def run_pipeline(historical_data, odds_data):
     logging.info("Running pipeline")
 
-    X_transformer, y_transformer, label_encoders = prepare_data_for_transformer(historical_data, odds_data)
-
-    def custom_serialize(obj):
-        logging.debug("Custom serialize")
-        return orjson.dumps(obj)
-
-    def custom_deserialize(s):
-        logging.debug("Custom deserialize")
-        return orjson.loads(s)
+    gluonts_dataset, label_encoders = prepare_data_for_transformer(historical_data, odds_data)
 
     context_length = 64
-    train_size = int(0.8 * len(X_transformer))
-    val_size = len(X_transformer) - train_size
 
-    logging.debug("Creating train and validation datasets")
-    train_dataset = NBADataset(np.array(X_transformer[:train_size]), np.array(y_transformer[:train_size]), context_length, 
-                            serializer=custom_serialize, deserializer=custom_deserialize)
-    val_dataset = NBADataset(np.array(X_transformer[train_size:]), np.array(y_transformer[train_size:]), context_length, 
-                            serializer=custom_serialize, deserializer=custom_deserialize)
+    train_data = gluonts_dataset.train
+    test_data = gluonts_dataset.test
 
-    train_dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=32, shuffle=False)
-
-    # Debug: Check the dataloaders
-    logging.debug(f"Train DataLoader size: {len(train_dataloader)}")
-    logging.debug(f"Val DataLoader size: {len(val_dataloader)}")
-
+    logging.debug("Training estimator with GluonTS dataset")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
@@ -415,32 +398,20 @@ def run_pipeline(historical_data, odds_data):
         trainer_kwargs={"max_epochs": 50}
     )
 
-    # Debug: Check the val_dataloader before training
-    logging.debug(f"val_dataloader: {val_dataloader}")
-
-    logging.debug("Training estimator")
-    predictor = estimator.train(train_dataloader, val_dataloaders=val_dataloader, cache_data=True, shuffle_buffer_length=1000)
+    predictor = estimator.train(train_data, val_dataloaders=test_data, cache_data=True, shuffle_buffer_length=1000)
 
     model_path = "fine_tuned_lag_llama.ckpt"
     torch.save(predictor.state_dict(), model_path)
     logging.debug(f"Model saved to {model_path}")
 
     forecast_it, ts_it = make_evaluation_predictions(
-        dataset=val_dataloader,
+        dataset=test_data,
         predictor=predictor,
         num_samples=20
     )
 
-    # Debug: Check the structure of val_dataloader and its first batch
-    logging.debug(f"val_dataloader type: {type(val_dataloader)}")
-    try:
-        first_batch = next(iter(val_dataloader))
-        logging.debug(f"val_dataloader first batch: {first_batch}")
-    except StopIteration:
-        logging.debug("val_dataloader is empty")
-
-    forecasts = list(tqdm(forecast_it, total=len(val_dataloader), desc="Forecasting batches"))
-    tss = list(tqdm(ts_it, total=len(val_dataloader), desc="Ground truth"))
+    forecasts = list(tqdm(forecast_it, total=len(test_data), desc="Forecasting batches"))
+    tss = list(tqdm(ts_it, total=len(test_data), desc="Ground truth"))
 
     plt.figure(figsize=(20, 15))
     date_formater = mdates.DateFormatter('%b, %d')
