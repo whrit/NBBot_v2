@@ -18,6 +18,19 @@ import orjson
 import psutil
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
+import time
+import atexit
+import sys
+
+# Start tracking time
+start_time = time.time()
+
+def exit_handler():
+    end_time = time.time()
+    total_time = end_time - start_time
+    logging.info(f"Total runtime: {total_time:.2f} seconds")
+
+atexit.register(exit_handler)
 
 log_file = "logfile.log"
 if os.path.exists(log_file):
