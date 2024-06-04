@@ -131,8 +131,8 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3, freq
     diagnose_data_issues(game_data, "Post-Merge")
     logging.debug(f"Columns after merging: {game_data.columns}")
 
-    freq = pd.infer_freq(game_data['date'])
-    logging.debug(f"Inferred frequency: {freq}")
+    inferred_freq = pd.infer_freq(game_data['date'])
+    logging.debug(f"Inferred frequency: {inferred_freq}")
 
     logging.debug("Adding game_id column")
     game_data['game_id'] = game_data.groupby(['date', 'team']).ngroup()
@@ -191,7 +191,7 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3, freq
         label_encoders[column] = le
 
     logging.info("Creating GluonTS dataset")
-    gluonts_dataset = get_gluonts_format(game_data, target='winner', freq=freq, prediction_length=prediction_length, test_length=test_length)
+    gluonts_dataset = get_gluonts_format(game_data, target='winner', freq=inferred_freq, prediction_length=prediction_length, test_length=test_length)
 
     logging.info("Data preparation completed.")
     return gluonts_dataset, label_encoders
