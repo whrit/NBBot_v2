@@ -89,8 +89,8 @@ def get_gluonts_format(df: pd.DataFrame, target, freq, prediction_length, test_l
     train_df = train_df.set_index('date')
     test_df = test_df.set_index('date')
 
-    train = PandasDataset(train_df, target=target)
-    test = PandasDataset(test_df, target=target)
+    train = PandasDataset(train_df, target=target, freq=freq)
+    test = PandasDataset(test_df, target=target, freq=freq)
     
     df_gluonts = TrainDatasets(metadata=meta, train=train, test=test)
     return df_gluonts
@@ -132,6 +132,11 @@ def prepare_data_for_transformer(historical_data, odds_data, window_size=3, freq
     logging.debug(f"Columns after merging: {game_data.columns}")
 
     inferred_freq = pd.infer_freq(game_data['date'])
+    if inferred_freq is None:
+        logging.warning("Unable to infer frequency from the dates. Setting default frequency to 'D'.")
+        inferred_freq = 'D'
+
+    logging.debug(f"Date column head: {game_data['date'].head()}")
     logging.debug(f"Inferred frequency: {inferred_freq}")
 
     logging.debug("Adding game_id column")
@@ -337,7 +342,7 @@ class NBADataset(Dataset):
         label = self.labels[idx]
         return torch.tensor(input_ids, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
 
-def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, device="cuda", batch_size=64, nonnegative_pred_samples=True):
+def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, device="cpu", batch_size=64, nonnegative_pred_samples=True):
     logging.info("Getting LagLlama predictions")
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
@@ -387,8 +392,17 @@ def run_pipeline(historical_data, odds_data):
     test_data = gluonts_dataset.test
 
     logging.debug("Training estimator with GluonTS dataset")
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    ckpt = torch.load("lag-llama.ckpt", map_location=device)
+    if not torch.backends.mps.is_available():
+        if not torch.backends.mps.is_built():
+            print("MPS not available because the current PyTorch install was not "
+                "built with MPS enabled.")
+        else:
+            print("MPS not available because the current MacOS version is not 12.3+ "
+                "and/or you do not have an MPS-enabled device on this machine.")
+
+    else:
+        mps_device = torch.device("mps")
+    ckpt = torch.load("lag-llama.ckpt", map_location=mps_device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 
     logging.debug("Creating LagLlamaEstimator")

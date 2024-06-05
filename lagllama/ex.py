@@ -78,74 +78,57 @@ stock_data['MINUS_DM'] = talib.MINUS_DM(stock_data['High'], stock_data['Low'], t
 logging.info("Checking for NaN values after calculating technical indicators...")
 logging.info(stock_data.isnull().sum())
 
-data_close = stock_data['Close'].values.reshape(-1, 1)
-split = int(len(data_close) * 0.9)
-data_close_train, data_close_test = data_close[:split], data_close[split:]
+stock_data.index = pd.to_datetime(stock_data.index)
 
-# Normalize the Close prices
-scaler = MinMaxScaler(feature_range=(-1, 1))
-price_data_train = scaler.fit_transform(data_close_train).flatten()
-price_data_test = scaler.transform(data_close_test).flatten()
+# 2. Split your data into training and testing
+split_ratio = 0.8  
+split_index = int(len(stock_data) * split_ratio)
 
-# Variable to control the number of future steps to predict
-steps = 10
+train_data = stock_data.iloc[:split_index]
+test_data = stock_data.iloc[split_index:]
 
-# Data Preprocessing Function modified for multi-step
-def create_sequences(data, sequence_length, steps):
-    xs, ys = [], []
-    for i in range(len(data) - sequence_length - steps + 1):
-        x = data[i:(i + sequence_length)]
-        y = data[i + sequence_length:i + sequence_length + steps]
-        xs.append(x)
-        ys.append(y)
-    return np.array(xs), np.array(ys)
+# 3. Create ListDataset instances
+start_date_train = pd.Timestamp(train_data.index[0])
+start_date_test = pd.Timestamp(test_data.index[0])
 
-# Create sequences with modified function
-sequence_length = 64
+# Select target column and features
+target_column = 'Close'  
+feature_columns = ['Open', 'High', 'Low', 'Volume']  
 
-# Split the data
-X_train, y_train = create_sequences(price_data_train, sequence_length, steps)
-X_test, y_test = create_sequences(price_data_test, sequence_length, steps)
+train_dataset = ListDataset(
+    [{"start": start_date_train, "target": train_data[target_column].values}],
+    freq="B" # Assuming your stock data is Business Day frequency
+)
 
-# Convert to PyTorch tensors, adjusted for multi-step
-X_train_tensor = torch.tensor(X_train, dtype=torch.float32)
-y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
-X_test_tensor = torch.tensor(X_test, dtype=torch.float32)
-y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
+test_dataset = ListDataset(
+    [{"start": start_date_train, "target": train_data[target_column].values}],
+    freq="B"  # Assuming your stock data is Business Day frequency
+)
 
-# Create DataLoader instances, adjusted for multi-step
-train_dataset = TensorDataset(X_train_tensor, y_train_tensor)
-test_dataset = TensorDataset(X_test_tensor, y_test_tensor)
-train_loader = DataLoader(train_dataset, batch_size=64, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=64, shuffle=False)
-
-def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, device="cpu", batch_size=64, nonnegative_pred_samples=True):
-    ckpt = torch.load("lag-llama.ckpt", map_location=device)
+# 4. Update get_lag_llama_predictions()
+def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="mps"):
+    ckpt = torch.load("lag-llama.ckpt", map_location=device)  # use 7b for better performance
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 
     estimator = LagLlamaEstimator(
-        ckpt_path="lag-llama.ckpt",
+        ckpt_path="lag-llama.ckpt",  # use 7b for better performance
         prediction_length=prediction_length,
         context_length=context_length,
-
+        num_parallel_samples=num_samples,
+        batch_size=batch_size,
         # estimator args
         input_size=estimator_args["input_size"],
         n_layer=estimator_args["n_layer"],
-        n_embd_per_head=estimator_args["n_embd_per_head"],
+        n_embd_per_head=estimator_args["n_head"], # n_embd_per_head is not present in the model card or the repo. Thus, we're using n_head.
         n_head=estimator_args["n_head"],
-        scaling=estimator_args["scaling"],
-        time_feat=estimator_args["time_feat"],
-
-        nonnegative_pred_samples=nonnegative_pred_samples,
+        scaling="std",
+        #time_feat=estimator_args["time_feat"],  # time_feat is not present in the model card or the repo. Thus, we're not using it.
 
         # linear positional encoding scaling
         rope_scaling={
             "type": "linear",
             "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
         },
-
-        batch_size=batch_size,
-        num_parallel_samples=num_samples,
     )
 
     lightning_module = estimator.create_lightning_module()
@@ -157,80 +140,102 @@ def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num
         predictor=predictor,
         num_samples=num_samples
     )
-    forecasts = list(tqdm.tqdm(forecast_it, total=len(dataset), desc="Forecasting batches"))
-    tss = list(tqdm.tqdm(ts_it, total=len(dataset), desc="Ground truth"))
+    forecasts = list(tqdm(forecast_it, total=len(dataset), desc="Forecasting batches"))
+    tss = list(tqdm(ts_it, total=len(dataset), desc="Ground truth"))
 
     return forecasts, tss
 
-# Fine-tuning function
-def fine_tune_lag_llama(train_dataset, test_dataset, prediction_length, context_length=32, num_samples=20, device="cpu", batch_size=64, max_epochs=50, lr=5e-4):
-    ckpt = torch.load("lag-llama.ckpt", map_location=device)
-    estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
-
-    estimator = LagLlamaEstimator(
-        ckpt_path="lag-llama.ckpt",
-        prediction_length=prediction_length,
-        context_length=context_length,
-
-        nonnegative_pred_samples=True,
-        aug_prob=0,
-        lr=lr,
-
-        # estimator args
-        input_size=estimator_args["input_size"],
-        n_layer=estimator_args["n_layer"],
-        n_embd_per_head=estimator_args["n_embd_per_head"],
-        n_head=estimator_args["n_head"],
-        time_feat=estimator_args["time_feat"],
-
-        batch_size=batch_size,
-        num_parallel_samples=num_samples,
-        trainer_kwargs={"max_epochs": max_epochs},
-    )
-
-    predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
-
-    forecast_it, ts_it = make_evaluation_predictions(
-        dataset=test_dataset,
-        predictor=predictor,
-        num_samples=num_samples
-    )
-
-    forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
-    tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
-
-    return forecasts, tss
-
-# Convert the start dates to DatetimeIndex with BDay frequency
-start_date_train = pd.to_datetime(stock_data.index[0])
-start_date_test = pd.to_datetime(stock_data.index[split])
-
-# Prepare dataset for Lag-Llama
-train_gluon_ds = ListDataset([{"start": start_date_train, "target": data_close_train[:, 0]}], freq="B")
-test_gluon_ds = ListDataset([{"start": start_date_test, "target": data_close_test[:, 0]}], freq="B")
-
-# Zero Shot Prediction
-prediction_length = steps
+# 3. Fine-tune Lag-Llama (with Hyperparameter Tuning)
+prediction_length = 24  
 context_length = prediction_length * 3
-num_samples = 20
+num_samples_list = [10, 20, 50]  
+learning_rates = [1e-3, 5e-4, 1e-4]
+max_epochs_list = [50, 100, 150]
+dropout_rates = [0.1, 0.2, 0.3]
 
-forecasts, tss = get_lag_llama_predictions(
-    test_gluon_ds,
-    prediction_length=prediction_length,
-    num_samples=num_samples,
-    context_length=context_length,
-    device=device
+best_agg_metrics = {}
+best_predictor = None  # Initialize to None
+
+# Fine-tuning loop with hyperparameter tuning
+for num_samples in num_samples_list:
+    for lr in learning_rates:
+        for max_epochs in max_epochs_list:
+            for dropout_rate in dropout_rates:
+                print(f"\n--- Fine-tuning with num_samples={num_samples}, lr={lr}, max_epochs={max_epochs}, dropout_rate={dropout_rate}---")
+
+                # Load the checkpoint (Same as in `get_lag_llama_predictions`)
+                ckpt = torch.load("lag-llama.ckpt", map_location=device)  
+                estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
+
+                # Create the estimator
+                estimator = LagLlamaEstimator(
+                    ckpt_path="lag-llama.ckpt",  # Load the 7b checkpoint
+                    prediction_length=prediction_length,
+                    context_length=context_length,
+                    nonnegative_pred_samples=True,
+                    aug_prob=0.1,                    
+                    lr=lr, 
+                    scaling="std",                   
+                    input_size=estimator_args["input_size"],
+                    n_layer=estimator_args["n_layer"],
+                    n_embd_per_head=estimator_args["n_head"], # n_embd_per_head is not present in the model card or the repo. Thus, we're using n_head.
+                    n_head=estimator_args["n_head"],
+                    #time_feat=estimator_args["time_feat"],
+                    batch_size=64,  
+                    num_parallel_samples=num_samples,
+                    trainer_kwargs={"max_epochs": max_epochs, "accelerator": device},
+                )
+
+                # Train the estimator
+                predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
+                
+                # Generate predictions on the test dataset (not the training dataset)
+                forecast_it, ts_it = make_evaluation_predictions(
+                    dataset=test_dataset,  # Use test_dataset for evaluation
+                    predictor=predictor,
+                    num_samples=num_samples
+                )
+
+                # Convert iterators to lists
+                forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
+                tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
+
+                # Evaluate and store the metrics for this configuration
+                evaluator = Evaluator()
+                agg_metrics, ts_metrics = evaluator(iter(tss), iter(forecasts))
+                print(f'Aggregate metrics: {agg_metrics}')
+                best_agg_metrics[(num_samples, lr, max_epochs, dropout_rate)] = agg_metrics
+
+                # If this is the best model so far, save it
+                if not best_agg_metrics or agg_metrics['MASE'] < best_agg_metrics[best_config]['MASE']:
+                    best_config = (num_samples, lr, max_epochs, dropout_rate)
+                    best_estimator = estimator  # Save the estimator object
+                    print("New best model found!")
+
+# Identify the best model based on the chosen metric (e.g., MASE)
+print(f"\nBest configuration: {best_config}, with metrics: {best_agg_metrics[best_config]}")
+
+# 5. Saving the Best Model
+best_predictor_module = best_estimator.create_lightning_module()
+torch.save(best_predictor_module.state_dict(), "best_lag_llama_predictor.pth") 
+
+# Generate predictions and ground truths using the best predictor
+forecast_it, ts_it = make_evaluation_predictions(
+    dataset=test_dataset,  
+    predictor=best_predictor,
+    num_samples=best_config[0]
 )
 
+forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
+tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
+
 plt.figure(figsize=(20, 15))
 date_formater = mdates.DateFormatter('%b, %d')
 plt.rcParams.update({'font.size': 15})
 
-# Iterate through the first 9 series, and plot the predicted samples
 for idx, (forecast, ts) in islice(enumerate(zip(forecasts, tss)), 9):
-    ax = plt.subplot(3, 3, idx+1)
-
-    plt.plot(ts[-4 * prediction_length:].to_timestamp(), label="target", )
+    ax = plt.subplot(3, 3, idx + 1)
+    plt.plot(ts[-4 * prediction_length:].to_timestamp(), label="target")
     forecast.plot(color='g')
     plt.xticks(rotation=60)
     ax.xaxis.set_major_formatter(date_formater)
@@ -238,163 +243,4 @@ for idx, (forecast, ts) in islice(enumerate(zip(forecasts, tss)), 9):
 
 plt.gcf().tight_layout()
 plt.legend()
-plt.show()
-
-# Fine-tuning
-prediction_length = steps
-context_length = prediction_length * 3
-num_samples = 20
-
-forecasts, tss = fine_tune_lag_llama(train_gluon_ds, test_gluon_ds, prediction_length, context_length, num_samples, device)
-
-plt.figure(figsize=(20, 15))
-date_formater = mdates.DateFormatter('%b, %d')
-plt.rcParams.update({'font.size': 15})
-
-# Iterate through the first 9 series, and plot the predicted samples
-for idx, (forecast, ts) in islice(enumerate(zip(forecasts, tss)), 9):
-    ax = plt.subplot(3, 3, idx+1)
-
-    plt.plot(ts[-4 * prediction_length:].to_timestamp(), label="target", )
-    forecast.plot(color='g')
-    plt.xticks(rotation=60)
-    ax.xaxis.set_major_formatter(date_formater)
-    ax.set_title(forecast.item_id)
-
-plt.gcf().tight_layout()
-plt.legend()
-plt.show()
-
-evaluator = Evaluator()
-agg_metrics, ts_metrics = evaluator(iter(tss), iter(forecasts))
-print(f'Aggregate metrics: {agg_metrics}')
-
-# Evaluation and Metrics Calculation for the original model
-class LagLlamaModel(nn.Module):
-    def __init__(self, input_size, context_length, prediction_length, device="cpu"):
-        super(LagLlamaModel, self).__init__()
-        self.context_length = context_length
-        self.prediction_length = prediction_length
-        self.device = device
-
-        ckpt = torch.load("lag-llama.ckpt", map_location=device)
-        estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
-
-        self.estimator = LagLlamaEstimator(
-            ckpt_path="lag-llama.ckpt",
-            prediction_length=self.prediction_length,
-            context_length=self.context_length,
-            input_size=estimator_args["input_size"],
-            n_layer=estimator_args["n_layer"],
-            n_embd_per_head=estimator_args["n_embd_per_head"],
-            n_head=estimator_args["n_head"],
-            scaling=estimator_args["scaling"],
-            time_feat=estimator_args["time_feat"],
-            nonnegative_pred_samples=True,
-            rope_scaling={
-                "type": "linear",
-                "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
-            },
-            batch_size=64,
-            num_parallel_samples=20,
-        )
-
-        self.lightning_module = self.estimator.create_lightning_module()
-        self.transformation = self.estimator.create_transformation()
-        self.predictor = self.estimator.create_predictor(self.transformation, self.lightning_module)
-
-    def forward(self, x):
-        x = x.permute(1, 0, 2)
-        return self.predictor(x)
-
-# Initialize and evaluate the model
-input_size = len(['Close', 'SMA_10', 'SMA_50', 'EMA_20', 'RSI', 'STOCH_K', 'STOCH_D', 'MACD', 'MACDSIGNAL', 'MACDHIST', 'ADX', 
-                  'OBV', 'ATR', 'BBANDS_UPPER', 'BBANDS_MIDDLE', 'BBANDS_LOWER', 'MOM', 'CCI', 'WILLR', 'TSF', 'TRIX', 
-                  'ULTOSC', 'ROC', 'PLUS_DI', 'MINUS_DI', 'PLUS_DM', 'MINUS_DM'])
-
-model = LagLlamaModel(input_size=input_size, context_length=sequence_length, prediction_length=steps).to(device)
-
-criterion = nn.MSELoss()
-optimizer = optim.AdamW(model.parameters(), lr=0.001)
-scheduler = OneCycleLR(optimizer, max_lr=0.01, steps_per_epoch=len(train_loader), epochs=50)
-
-def train_model(model, train_loader, test_loader, optimizer, criterion, scheduler, epochs, patience):
-    logging.info("Starting training...")
-    early_stopping = EarlyStopping(patience=patience, verbose=True)
-    scaler = GradScaler()
-    
-    for epoch in range(epochs):
-        model.train()
-        total_loss = 0
-        for batch in train_loader:
-            optimizer.zero_grad()
-            sequences, labels = batch
-            sequences, labels = sequences.to(device), labels.to(device)
-            
-            with autocast():
-                predictions = model(sequences)
-                loss = criterion(predictions, labels)
-            
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            scheduler.step()
-            total_loss += loss.item()
-        
-        validation_loss = evaluate(model, test_loader, criterion)
-        logging.info(f'Epoch {epoch+1}: Training Loss: {total_loss/len(train_loader)}, Validation Loss: {validation_loss}')
-        
-        early_stopping(validation_loss, model)
-        if early_stopping.early_stop:
-            logging.info("Early stopping")
-            break
-    
-    torch.save(model.state_dict(), 'checkpoint.pt')
-    model.load_state_dict(torch.load('checkpoint.pt', map_location=device))
-
-def evaluate(model, val_loader, criterion):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for batch in val_loader:
-            sequences, labels = batch
-            sequences, labels = sequences.to(device), labels.to(device)
-            predictions = model(sequences)
-            loss = criterion(predictions, labels)
-            total_loss += loss.item()
-    return total_loss / len(val_loader)
-
-train_model(model, train_loader, test_loader, optimizer, criterion, scheduler, epochs=50, patience=5)
-
-model.eval()
-with torch.no_grad():
-    predictions = []
-    true_labels = []
-    for batch in test_loader:
-        sequences, labels = batch
-        sequences, labels = sequences.to(device), labels.to(device)
-        preds = model(sequences)
-        predictions.extend(preds.cpu().numpy())
-        true_labels.extend(labels.cpu().numpy())
-
-predictions = np.array(predictions).reshape(-1, steps)
-true_labels = np.array(true_labels).reshape(-1, steps)
-
-mae = mean_absolute_error(true_labels, predictions, multioutput='raw_values')
-rmse = np.sqrt(mean_squared_error(true_labels, predictions, multioutput='raw_values'))
-print(f'MAE: {np.mean(mae)}')
-print(f'RMSE: {np.mean(rmse)}')
-
-# Plot actual vs predicted prices
-time_steps = np.arange(len(true_labels))
-
-plt.figure(figsize=((8,7)))
-plt.plot(time_steps, true_labels, label='Actual Prices', color='blue', linewidth=2)
-plt.plot(time_steps, predictions, label='Predicted Prices', color='red', linewidth=2)
-plt.title('SPY Stock Price Prediction')
-plt.xlabel('Time')
-plt.ylabel('Stock Price')
-plt.legend()
-plt.grid(True)
-plt.tight_layout()
 plt.show()
