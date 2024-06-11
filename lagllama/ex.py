@@ -106,7 +106,7 @@ test_dataset = ListDataset(
 )
 
 # 4. Update get_lag_llama_predictions()
-def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="mps"):
+def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="cuda"):
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
     print(estimator_args)  # Print configurations to ensure they are used
@@ -146,73 +146,69 @@ def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num
 # 3. Fine-tune Lag-Llama (with Hyperparameter Tuning)
 prediction_length = 24  
 context_length = prediction_length * 3
-num_samples_list = [10, 20, 50]  
-learning_rates = [1e-3, 5e-4, 1e-4]
-max_epochs_list = [50, 100, 150]
-dropout_rates = [0.1, 0.2, 0.3]
+num_samples = 20
 
 best_agg_metrics = {}
 best_predictor = None  # Initialize to None
 
-# Fine-tuning loop with hyperparameter tuning
-for num_samples in num_samples_list:
-    for lr in learning_rates:
-        for max_epochs in max_epochs_list:
-            for dropout_rate in dropout_rates:
-                print(f"\n--- Fine-tuning with num_samples={num_samples}, lr={lr}, max_epochs={max_epochs}, dropout_rate={dropout_rate}---")
 
-                # Load the checkpoint (Same as in `get_lag_llama_predictions`)
-                ckpt = torch.load("lag-llama.ckpt", map_location=device)
-                estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
-                print(estimator_args)  # Print configurations to ensure they are used
+# Load the checkpoint (Same as in `get_lag_llama_predictions`)
+ckpt = torch.load("lag-llama.ckpt", map_location=device)
+estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
+print(estimator_args)  # Print configurations to ensure they are used
 
-                # Create estimator using configurations from checkpoint
-                estimator = LagLlamaEstimator(
-                    ckpt_path="lag-llama.ckpt",
-                    prediction_length=prediction_length,
-                    context_length=context_length,
-                    num_parallel_samples=num_samples,
-                    batch_size=64,
-                    input_size=estimator_args["input_size"],
-                    n_layer=estimator_args["n_layer"],
-                    n_embd_per_head=estimator_args["n_embd_per_head"],
-                    n_head=estimator_args["n_head"],
-                    # scaling=estimator_args["scaling"],
-                    # rope_scaling={
-                    #     "type": "linear",
-                    #     "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
-                    # },
-                )
+# Create estimator using configurations from checkpoint
+estimator = LagLlamaEstimator(
+        ckpt_path="lag-llama.ckpt",
+        prediction_length=prediction_length,
+        context_length=context_length,
 
-                # Train the estimator
-                predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
-                
-                # Generate predictions on the test dataset (not the training dataset)
-                forecast_it, ts_it = make_evaluation_predictions(
-                    dataset=test_dataset,  # Use test_dataset for evaluation
-                    predictor=predictor,
-                    num_samples=num_samples
-                )
+        # distr_output="neg_bin",
+        # scaling="mean",
+        nonnegative_pred_samples=True,
+        aug_prob=0,
+        lr=5e-4,
 
-                # Convert iterators to lists
-                forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
-                tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
+        # estimator args
+        input_size=estimator_args["input_size"],
+        n_layer=estimator_args["n_layer"],
+        n_embd_per_head=estimator_args["n_embd_per_head"],
+        n_head=estimator_args["n_head"],
+        time_feat=estimator_args["time_feat"],
 
-                # Evaluate and store the metrics for this configuration
-                evaluator = Evaluator()
-                agg_metrics, ts_metrics = evaluator(iter(tss), iter(forecasts))
-                print(f'Aggregate metrics: {agg_metrics}')
-                best_agg_metrics[(num_samples, lr, max_epochs, dropout_rate)] = agg_metrics
+        # rope_scaling={
+        #     "type": "linear",
+        #     "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
+        # },
 
-                # If this is the best model so far, save it
-                if not best_agg_metrics or agg_metrics['MASE'] < best_agg_metrics[best_config]['MASE']:
-                    best_config = (num_samples, lr, max_epochs, dropout_rate)
-                    best_estimator = estimator  # Save the estimator object
-                    print("New best model found!")
+        batch_size=64,
+        num_parallel_samples=num_samples,
+        trainer_kwargs = {"max_epochs": 50,}, # <- lightning trainer arguments
+    )
+
+# Train the estimator
+predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
+
+# Generate predictions on the test dataset (not the training dataset)
+forecast_it, ts_it = make_evaluation_predictions(
+    dataset=test_dataset,  # Use test_dataset for evaluation
+    predictor=predictor,
+    num_samples=num_samples
+)
+
+# Convert iterators to lists
+forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
+tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
+
+# Evaluate and store the metrics for this configuration
+evaluator = Evaluator()
+agg_metrics, ts_metrics = evaluator(iter(tss), iter(forecasts))
+print(f'Aggregate metrics: {agg_metrics}')
+
+best_estimator = estimator  # Save the estimator object
+print("New best model found!")
 
 # Identify the best model based on the chosen metric (e.g., MASE)
-print(f"\nBest configuration: {best_config}, with metrics: {best_agg_metrics[best_config]}")
-
 # 5. Saving the Best Model
 best_predictor_module = best_estimator.create_lightning_module()
 torch.save(best_predictor_module.state_dict(), "best_lag_llama_predictor.pth") 
@@ -221,7 +217,7 @@ torch.save(best_predictor_module.state_dict(), "best_lag_llama_predictor.pth")
 forecast_it, ts_it = make_evaluation_predictions(
     dataset=test_dataset,  
     predictor=best_predictor,
-    num_samples=best_config[0]
+    num_samples=num_samples
 )
 
 forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
