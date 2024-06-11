@@ -14,7 +14,6 @@ scipy==1.13.1
 TA_Lib==0.4.30
 tensorflow==2.16.1
 tensorrt==10.0.1
-torch==2.3.0
 tqdm==4.66.4
 transformers==4.41.2
 wandb==0.17.1
