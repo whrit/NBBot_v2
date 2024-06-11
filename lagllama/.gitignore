@@ -171,7 +171,6 @@ data/datasets
 hyperparameters_lag_transformer
 notebooks
 datasets
-*ckpt
 *tar.gz
 logfile.log
 logs/
