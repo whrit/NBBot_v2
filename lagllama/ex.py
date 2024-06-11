@@ -220,7 +220,7 @@ estimator = LagLlamaEstimator(
             "max_epochs": 50,
             "enable_progress_bar": True,
             "enable_model_summary": False,
-            "callbacks": [checkpoint_callback, early_stop_callback],
+            "callbacks": [early_stop_callback],
         },
     )
 
