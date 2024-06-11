@@ -117,25 +117,6 @@ test_dataset = ListDataset(
     freq="B"  # Assuming your stock data is Business Day frequency
 )
 
-from lightning.pytorch.callbacks import ModelCheckpoint
-
-checkpoint_callback = ModelCheckpoint(
-    dirpath="checkpoints",
-    filename="lag_llama_{epoch:02d}_{train_loss:.4f}",
-    save_top_k=1,
-    monitor="train_loss",
-    mode="min",
-    auto_insert_metric_name=False,
-)
-
-from lightning.pytorch.callbacks import EarlyStopping
-
-early_stop_callback = EarlyStopping(
-    monitor="val_loss",
-    patience=5,
-    mode="min",
-)
-
 # 4. Update get_lag_llama_predictions()
 def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="cuda"):
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
@@ -220,7 +201,6 @@ estimator = LagLlamaEstimator(
             "max_epochs": 50,
             "enable_progress_bar": True,
             "enable_model_summary": False,
-            "callbacks": [early_stop_callback],
         },
     )
 
