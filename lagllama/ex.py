@@ -164,26 +164,28 @@ for num_samples in num_samples_list:
                 print(f"\n--- Fine-tuning with num_samples={num_samples}, lr={lr}, max_epochs={max_epochs}, dropout_rate={dropout_rate}---")
 
                 # Load the checkpoint (Same as in `get_lag_llama_predictions`)
-                ckpt = torch.load("lag-llama.ckpt", map_location=device)  
+                ckpt = torch.load("lag-llama.ckpt", map_location=device)  # Load checkpoint
                 estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 
-                # Create the estimator
+                print(estimator_args)  # Print out the configurations used for the checkpoint
+
+                # Use these configurations to create the estimator
                 estimator = LagLlamaEstimator(
-                    ckpt_path="lag-llama.ckpt",  # Load the 7b checkpoint
+                    ckpt_path="lag-llama.ckpt",
                     prediction_length=prediction_length,
                     context_length=context_length,
-                    nonnegative_pred_samples=True,
-                    aug_prob=0.1,                    
-                    lr=lr, 
-                    scaling="std",                   
+                    num_parallel_samples=num_samples,
+                    batch_size=64,
+                    # Use the configurations from the checkpoint
                     input_size=estimator_args["input_size"],
                     n_layer=estimator_args["n_layer"],
-                    n_embd_per_head=estimator_args["n_head"], # n_embd_per_head is not present in the model card or the repo. Thus, we're using n_head.
+                    n_embd_per_head=estimator_args["n_head"],  # Adjust if necessary
                     n_head=estimator_args["n_head"],
-                    #time_feat=estimator_args["time_feat"],
-                    batch_size=64,  
-                    num_parallel_samples=num_samples,
-                    trainer_kwargs={"max_epochs": max_epochs, "accelerator": device},
+                    scaling="std",
+                    rope_scaling={
+                        "type": "linear",
+                        "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
+                    },
                 )
 
                 # Train the estimator
