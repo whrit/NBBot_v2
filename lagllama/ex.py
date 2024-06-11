@@ -23,6 +23,8 @@ from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping
 
+logger = TensorBoardLogger("logs/", name="lag_llama")
+
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.has_mps else "cpu")
 print(f"Using device: {device}")  # Optional: to confirm the device being used
@@ -94,9 +96,9 @@ val_data = stock_data[train_size:train_size+val_size]
 test_data = stock_data[train_size+val_size:]
 
 # Create validation dataset
-start_date_val = pd.Timestamp(val_data.index[0])
-start_date_train = pd.Timestamp(train_data.index[0])
-start_date_test = pd.Timestamp(test_data.index[0])
+start_date_val = val_data.index[0].to_pydatetime()
+start_date_train = train_data.index[0].to_pydatetime()
+start_date_test = test_data.index[0].to_pydatetime()
 
 # Select target column and features
 target_column = 'Close'  
@@ -201,11 +203,12 @@ estimator = LagLlamaEstimator(
             "max_epochs": 50,
             "enable_progress_bar": True,
             "enable_model_summary": False,
+            "logger": logger,
         },
     )
 
 # Train the estimator
-predictor = estimator.train(train_dataset, val_dataset=val_dataset, cache_data=True, shuffle_buffer_length=1000)
+predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
 
 # Generate predictions on the test dataset (not the training dataset)
 forecast_it, ts_it = make_evaluation_predictions(
