@@ -80,20 +80,32 @@ logging.info(stock_data.isnull().sum())
 
 stock_data.index = pd.to_datetime(stock_data.index)
 
-# 2. Split your data into training and testing
-split_ratio = 0.8  
-split_index = int(len(stock_data) * split_ratio)
+# Split the data into training, validation, and testing sets
+train_ratio = 0.7
+val_ratio = 0.15
+test_ratio = 0.15
 
-train_data = stock_data.iloc[:split_index]
-test_data = stock_data.iloc[split_index:]
+train_size = int(len(stock_data) * train_ratio)
+val_size = int(len(stock_data) * val_ratio)
+test_size = len(stock_data) - train_size - val_size
 
-# 3. Create ListDataset instances
+train_data = stock_data[:train_size]
+val_data = stock_data[train_size:train_size+val_size]
+test_data = stock_data[train_size+val_size:]
+
+# Create validation dataset
+start_date_val = pd.Timestamp(val_data.index[0])
 start_date_train = pd.Timestamp(train_data.index[0])
 start_date_test = pd.Timestamp(test_data.index[0])
 
 # Select target column and features
 target_column = 'Close'  
 feature_columns = ['Open', 'High', 'Low', 'Volume']  
+
+val_dataset = ListDataset(
+    [{"start": start_date_val, "target": val_data[target_column].values}],
+    freq="B"
+)
 
 train_dataset = ListDataset(
     [{"start": start_date_train, "target": train_data[target_column].values}],
@@ -105,12 +117,31 @@ test_dataset = ListDataset(
     freq="B"  # Assuming your stock data is Business Day frequency
 )
 
+from pytorch_lightning.callbacks import ModelCheckpoint
+
+checkpoint_callback = ModelCheckpoint(
+    dirpath="checkpoints",
+    filename="lag_llama_{epoch:02d}_{train_loss:.4f}",
+    save_top_k=1,
+    monitor="train_loss",
+    mode="min",
+)
+
+from pytorch_lightning.callbacks import EarlyStopping
+
+early_stop_callback = EarlyStopping(
+    monitor="val_loss",
+    patience=5,
+    mode="min",
+)
+
 # 4. Update get_lag_llama_predictions()
 def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="cuda"):
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
     print(estimator_args)  # Print configurations to ensure they are used
 
+    torch.set_float32_matmul_precision('high')
     # Create estimator using configurations from checkpoint
     estimator = LagLlamaEstimator(
         ckpt_path="lag-llama.ckpt",
@@ -157,6 +188,7 @@ ckpt = torch.load("lag-llama.ckpt", map_location=device)
 estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 print(estimator_args)  # Print configurations to ensure they are used
 
+torch.set_float32_matmul_precision('high')
 # Create estimator using configurations from checkpoint
 estimator = LagLlamaEstimator(
         ckpt_path="lag-llama.ckpt",
@@ -183,11 +215,16 @@ estimator = LagLlamaEstimator(
 
         batch_size=64,
         num_parallel_samples=num_samples,
-        trainer_kwargs = {"max_epochs": 50,}, # <- lightning trainer arguments
+        trainer_kwargs={
+            "max_epochs": 50,
+            "enable_progress_bar": True,
+            "enable_model_summary": False,
+            "callbacks": [checkpoint_callback, early_stop_callback],
+        },
     )
 
 # Train the estimator
-predictor = estimator.train(train_dataset, cache_data=True, shuffle_buffer_length=1000)
+predictor = estimator.train(train_dataset, val_dataset=val_dataset, cache_data=True, shuffle_buffer_length=1000)
 
 # Generate predictions on the test dataset (not the training dataset)
 forecast_it, ts_it = make_evaluation_predictions(
