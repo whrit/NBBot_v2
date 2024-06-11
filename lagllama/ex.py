@@ -117,7 +117,7 @@ test_dataset = ListDataset(
     freq="B"  # Assuming your stock data is Business Day frequency
 )
 
-from pytorch_lightning.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint
 
 checkpoint_callback = ModelCheckpoint(
     dirpath="checkpoints",
@@ -127,7 +127,7 @@ checkpoint_callback = ModelCheckpoint(
     mode="min",
 )
 
-from pytorch_lightning.callbacks import EarlyStopping
+from lightning.pytorch.callbacks import EarlyStopping
 
 early_stop_callback = EarlyStopping(
     monitor="val_loss",
