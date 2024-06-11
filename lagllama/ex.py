@@ -97,7 +97,7 @@ feature_columns = ['Open', 'High', 'Low', 'Volume']
 
 train_dataset = ListDataset(
     [{"start": start_date_train, "target": train_data[target_column].values}],
-    freq="B" # Assuming your stock data is Business Day frequency
+    freq="B"  # Assuming your stock data is Business Day frequency
 )
 
 test_dataset = ListDataset(
