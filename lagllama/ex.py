@@ -107,24 +107,24 @@ test_dataset = ListDataset(
 
 # 4. Update get_lag_llama_predictions()
 def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="mps"):
-    ckpt = torch.load("lag-llama.ckpt", map_location=device)  # use 7b for better performance
+    ckpt = torch.load("lag-llama.ckpt", map_location=device)  # Load checkpoint
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 
+    print(estimator_args)  # Print out the configurations used for the checkpoint
+
+    # Use these configurations to create the estimator
     estimator = LagLlamaEstimator(
-        ckpt_path="lag-llama.ckpt",  # use 7b for better performance
+        ckpt_path="lag-llama.ckpt",
         prediction_length=prediction_length,
         context_length=context_length,
         num_parallel_samples=num_samples,
         batch_size=batch_size,
-        # estimator args
+        # Use the configurations from the checkpoint
         input_size=estimator_args["input_size"],
         n_layer=estimator_args["n_layer"],
-        n_embd_per_head=estimator_args["n_head"], # n_embd_per_head is not present in the model card or the repo. Thus, we're using n_head.
+        n_embd_per_head=estimator_args["n_head"],  # Adjust if necessary
         n_head=estimator_args["n_head"],
         scaling="std",
-        #time_feat=estimator_args["time_feat"],  # time_feat is not present in the model card or the repo. Thus, we're not using it.
-
-        # linear positional encoding scaling
         rope_scaling={
             "type": "linear",
             "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),

@@ -13,3 +13,4 @@ Post-Opponent Features_diagnostics.csv
 X_lstm_train_diagnostics.csv
 X_xgb_train_diagnostics.csv
 models/
+latest_error.txt
