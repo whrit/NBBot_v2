@@ -26,6 +26,9 @@ import sys
 # Start tracking time
 start_time = time.time()
 
+device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.has_mps else "cpu")
+print(f"Using device: {device}")  # Optional: to confirm the device being used
+
 def exit_handler():
     end_time = time.time()
     total_time = end_time - start_time
@@ -342,7 +345,7 @@ class NBADataset(Dataset):
         label = self.labels[idx]
         return torch.tensor(input_ids, dtype=torch.float32), torch.tensor(label, dtype=torch.long)
 
-def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, device="cpu", batch_size=64, nonnegative_pred_samples=True):
+def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, device="cuda", batch_size=64, nonnegative_pred_samples=True):
     logging.info("Getting LagLlama predictions")
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
@@ -392,17 +395,7 @@ def run_pipeline(historical_data, odds_data):
     test_data = gluonts_dataset.test
 
     logging.debug("Training estimator with GluonTS dataset")
-    if not torch.backends.mps.is_available():
-        if not torch.backends.mps.is_built():
-            print("MPS not available because the current PyTorch install was not "
-                "built with MPS enabled.")
-        else:
-            print("MPS not available because the current MacOS version is not 12.3+ "
-                "and/or you do not have an MPS-enabled device on this machine.")
-
-    else:
-        mps_device = torch.device("mps")
-    ckpt = torch.load("lag-llama.ckpt", map_location=mps_device)
+    ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
 
     logging.debug("Creating LagLlamaEstimator")
