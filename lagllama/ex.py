@@ -177,11 +177,11 @@ for num_samples in num_samples_list:
                     n_layer=estimator_args["n_layer"],
                     n_embd_per_head=estimator_args["n_embd_per_head"],
                     n_head=estimator_args["n_head"],
-                    scaling=estimator_args["scaling"],
-                    rope_scaling={
-                        "type": "linear",
-                        "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
-                    },
+                    # scaling=estimator_args["scaling"],
+                    # rope_scaling={
+                    #     "type": "linear",
+                    #     "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
+                    # },
                 )
 
                 # Train the estimator
