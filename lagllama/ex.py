@@ -125,6 +125,8 @@ checkpoint_callback = ModelCheckpoint(
     save_top_k=1,
     monitor="train_loss",
     mode="min",
+    auto_insert_metric_name=False,
+    state_key="lag_llama_checkpoint",  # Add a unique state_key
 )
 
 from lightning.pytorch.callbacks import EarlyStopping
