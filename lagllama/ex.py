@@ -38,7 +38,7 @@ def main():
 
     # Fetch SPY data
     logging.info("Fetching stock data...")
-    stock_data = yf.download('SPY', start='2004-01-01', end='2024-05-17')
+    stock_data = yf.download('SPY', start='2004-01-01', end='2024-06-11')
 
     # Swap "Adj Close" data into the "Close" column
     logging.info("Swapping 'Adj Close' data into 'Close' column...")
