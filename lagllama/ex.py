@@ -24,6 +24,9 @@ from transformers import AdamW, get_scheduler
 from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import EarlyStopping
+import warnings
+
+warnings.filterwarnings(action='ignore', category=FutureWarning, message=r".*Use a DatetimeIndex.*")
 
 logger = TensorBoardLogger("logs/", name="lag_llama")
 
@@ -37,7 +40,7 @@ def main():
     torch.manual_seed(42)
 
     # Fetch SPY data
-    logging.info("Fetching stock data...")
+    logging.info("Fetching stock_data...")
     stock_data = yf.download('SPY', start='2004-01-01', end='2024-06-11')
 
     # Swap "Adj Close" data into the "Close" column
@@ -114,15 +117,14 @@ def main():
 
     train_dataset = ListDataset(
         [{"start": start_date_train, "target": train_data[target_column].values}],
-        freq="B"  # Assuming your stock data is Business Day frequency
+        freq="B"  # Assuming your stock_data is Business Day frequency
     )
 
     test_dataset = ListDataset(
         [{"start": start_date_train, "target": train_data[target_column].values}],
-        freq="B"  # Assuming your stock data is Business Day frequency
+        freq="B"  # Assuming your stock_data is Business Day frequency
     )
 
-    # 4. Update get_lag_llama_predictions()
     def get_lag_llama_predictions(dataset, prediction_length, context_length=32, num_samples=20, batch_size=64, device="cuda"):
         ckpt = torch.load("lag-llama.ckpt", map_location=device)
         estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
@@ -169,7 +171,6 @@ def main():
     best_agg_metrics = {}
     best_predictor = None  # Initialize to None
 
-
     # Load the checkpoint (Same as in `get_lag_llama_predictions`)
     ckpt = torch.load("lag-llama.ckpt", map_location=device)
     estimator_args = ckpt["hyper_parameters"]["model_kwargs"]
@@ -181,9 +182,6 @@ def main():
             ckpt_path="lag-llama.ckpt",
             prediction_length=prediction_length,
             context_length=context_length,
-
-            # distr_output="neg_bin",
-            # scaling="mean",
             nonnegative_pred_samples=True,
             aug_prob=0,
             lr=5e-4,
@@ -194,11 +192,6 @@ def main():
             n_embd_per_head=estimator_args["n_embd_per_head"],
             n_head=estimator_args["n_head"],
             time_feat=estimator_args["time_feat"],
-
-            # rope_scaling={
-            #     "type": "linear",
-            #     "factor": max(1.0, (context_length + prediction_length) / estimator_args["context_length"]),
-            # },
 
             batch_size=64,
             num_parallel_samples=num_samples,
@@ -240,7 +233,7 @@ def main():
     # Generate predictions and ground truths using the best predictor
     forecast_it, ts_it = make_evaluation_predictions(
         dataset=test_dataset,  
-        predictor=best_predictor,
+        predictor=predictor,
         num_samples=num_samples
     )
 
