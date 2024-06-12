@@ -1,15 +1,9 @@
 import os
-os.environ['OPENBLAS_NUM_THREADS'] = '1'
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-from torch.utils.data import DataLoader, TensorDataset
-from torch.optim.lr_scheduler import OneCycleLR
 import logging
 import talib
 import yfinance as yf
@@ -20,10 +14,7 @@ import matplotlib.dates as mdates
 from gluonts.dataset.common import ListDataset
 from gluonts.evaluation import make_evaluation_predictions, Evaluator
 from lag_llama.gluon.estimator import LagLlamaEstimator
-from transformers import AdamW, get_scheduler
-from pytorch_lightning import Trainer
 from pytorch_lightning.loggers import TensorBoardLogger
-from pytorch_lightning.callbacks import EarlyStopping
 import warnings
 
 warnings.filterwarnings(action='ignore', category=FutureWarning, message=r".*Use a DatetimeIndex.*")
@@ -33,6 +24,14 @@ logger = TensorBoardLogger("logs/", name="lag_llama")
 # Device configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.has_mps else "cpu")
 print(f"Using device: {device}")  # Optional: to confirm the device being used
+
+def save_predictions(forecasts, tss, filename="predictions.csv"):
+    predictions = []
+    for forecast, ts in zip(forecasts, tss):
+        for i, value in enumerate(forecast.samples.mean(axis=0)):
+            predictions.append({"date": ts.index[i], "true_value": ts.values[i], "predicted_value": value})
+    df = pd.DataFrame(predictions)
+    df.to_csv(filename, index=False)
 
 def main():
     # Set random seed for reproducibility
@@ -163,7 +162,6 @@ def main():
 
         return forecasts, tss
 
-    # 3. Fine-tune Lag-Llama (with Hyperparameter Tuning)
     prediction_length = 24  
     context_length = prediction_length * 3
     num_samples = 20
@@ -186,7 +184,6 @@ def main():
             aug_prob=0,
             lr=5e-4,
 
-            # estimator args
             input_size=estimator_args["input_size"],
             n_layer=estimator_args["n_layer"],
             n_embd_per_head=estimator_args["n_embd_per_head"],
@@ -216,6 +213,9 @@ def main():
     # Convert iterators to lists
     forecasts = list(tqdm.tqdm(forecast_it, total=len(test_dataset), desc="Forecasting batches"))
     tss = list(tqdm.tqdm(ts_it, total=len(test_dataset), desc="Ground truth"))
+
+    # Save predictions to CSV file
+    save_predictions(forecasts, tss, filename="predictions.csv")
 
     # Evaluate and store the metrics for this configuration
     evaluator = Evaluator()
