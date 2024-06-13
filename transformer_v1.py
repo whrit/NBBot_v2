@@ -365,8 +365,8 @@ def run_pipeline(historical_data, odds_data):
     return predictor
 
 # Example usage
-odds_data = pd.read_csv("/mnt/data/combined_od_v1.csv")
-historical_data = pd.read_csv("/mnt/data/2012_to_2024_data.csv")
+odds_data = pd.read_csv("combined_od_v1.csv")
+historical_data = pd.read_csv("2012_to_2024_data.csv")
 
 logging.info("Starting pipeline...")
 predictor = run_pipeline(historical_data, odds_data)
